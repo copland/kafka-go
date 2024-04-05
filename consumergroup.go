@@ -69,6 +69,10 @@ type ConsumerGroupConfig struct {
 	// ID is the consumer group ID.  It must not be empty.
 	ID string
 
+	// InstanceID is the optional instance ID used to make this a static member.
+	// If no value or the empty string is provided, this member will be dynamic.
+	InstanceID string
+
 	// The list of broker addresses used to connect to the kafka cluster.  It
 	// must not be empty.
 	Brokers []string
@@ -420,11 +424,11 @@ func (g *Generation) CommitOffsets(offsets map[string]map[int]int64) error {
 		return nil
 	}
 
-	topics := make([]offsetCommitRequestV2Topic, 0, len(offsets))
+	topics := make([]offsetCommitRequestV7Topic, 0, len(offsets))
 	for topic, partitions := range offsets {
-		t := offsetCommitRequestV2Topic{Topic: topic}
+		t := offsetCommitRequestV7Topic{Topic: topic}
 		for partition, offset := range partitions {
-			t.Partitions = append(t.Partitions, offsetCommitRequestV2Partition{
+			t.Partitions = append(t.Partitions, offsetCommitRequestV7Partition{
 				Partition: int32(partition),
 				Offset:    offset,
 			})
@@ -432,7 +436,7 @@ func (g *Generation) CommitOffsets(offsets map[string]map[int]int64) error {
 		topics = append(topics, t)
 	}
 
-	request := offsetCommitRequestV2{
+	request := offsetCommitRequestV7{
 		GroupID:       g.GroupID,
 		GenerationID:  g.ID,
 		MemberID:      g.MemberID,
@@ -478,7 +482,7 @@ func (g *Generation) heartbeatLoop(interval time.Duration) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				_, err := g.conn.heartbeat(heartbeatRequestV0{
+				_, err := g.conn.heartbeat(heartbeatRequestV3{
 					GroupID:      g.GroupID,
 					GenerationID: g.ID,
 					MemberID:     g.MemberID,
@@ -555,12 +559,12 @@ func (g *Generation) partitionWatcher(interval time.Duration, topic string) {
 type coordinator interface {
 	io.Closer
 	findCoordinator(findCoordinatorRequestV0) (findCoordinatorResponseV0, error)
-	joinGroup(joinGroupRequestV1) (joinGroupResponseV1, error)
-	syncGroup(syncGroupRequestV0) (syncGroupResponseV0, error)
+	joinGroup(joinGroupRequestV5) (joinGroupResponseV5, error)
+	syncGroup(syncGroupRequestV3) (syncGroupResponseV3, error)
 	leaveGroup(leaveGroupRequestV0) (leaveGroupResponseV0, error)
-	heartbeat(heartbeatRequestV0) (heartbeatResponseV0, error)
+	heartbeat(heartbeatRequestV3) (heartbeatResponseV3, error)
 	offsetFetch(offsetFetchRequestV1) (offsetFetchResponseV1, error)
-	offsetCommit(offsetCommitRequestV2) (offsetCommitResponseV2, error)
+	offsetCommit(offsetCommitRequestV7) (offsetCommitResponseV7, error)
 	readPartitions(...string) ([]Partition, error)
 }
 
@@ -588,20 +592,20 @@ func (t *timeoutCoordinator) findCoordinator(req findCoordinatorRequestV0) (find
 	return t.conn.findCoordinator(req)
 }
 
-func (t *timeoutCoordinator) joinGroup(req joinGroupRequestV1) (joinGroupResponseV1, error) {
+func (t *timeoutCoordinator) joinGroup(req joinGroupRequestV5) (joinGroupResponseV5, error) {
 	// in the case of join group, the consumer group coordinator may wait up
 	// to rebalance timeout in order to wait for all members to join.
 	if err := t.conn.SetDeadline(time.Now().Add(t.timeout + t.rebalanceTimeout)); err != nil {
-		return joinGroupResponseV1{}, err
+		return joinGroupResponseV5{}, err
 	}
 	return t.conn.joinGroup(req)
 }
 
-func (t *timeoutCoordinator) syncGroup(req syncGroupRequestV0) (syncGroupResponseV0, error) {
+func (t *timeoutCoordinator) syncGroup(req syncGroupRequestV3) (syncGroupResponseV3, error) {
 	// in the case of sync group, the consumer group leader is given up to
 	// the session timeout to respond before the coordinator will give up.
 	if err := t.conn.SetDeadline(time.Now().Add(t.timeout + t.sessionTimeout)); err != nil {
-		return syncGroupResponseV0{}, err
+		return syncGroupResponseV3{}, err
 	}
 	return t.conn.syncGroup(req)
 }
@@ -613,9 +617,9 @@ func (t *timeoutCoordinator) leaveGroup(req leaveGroupRequestV0) (leaveGroupResp
 	return t.conn.leaveGroup(req)
 }
 
-func (t *timeoutCoordinator) heartbeat(req heartbeatRequestV0) (heartbeatResponseV0, error) {
+func (t *timeoutCoordinator) heartbeat(req heartbeatRequestV3) (heartbeatResponseV3, error) {
 	if err := t.conn.SetDeadline(time.Now().Add(t.timeout)); err != nil {
-		return heartbeatResponseV0{}, err
+		return heartbeatResponseV3{}, err
 	}
 	return t.conn.heartbeat(req)
 }
@@ -627,9 +631,9 @@ func (t *timeoutCoordinator) offsetFetch(req offsetFetchRequestV1) (offsetFetchR
 	return t.conn.offsetFetch(req)
 }
 
-func (t *timeoutCoordinator) offsetCommit(req offsetCommitRequestV2) (offsetCommitResponseV2, error) {
+func (t *timeoutCoordinator) offsetCommit(req offsetCommitRequestV7) (offsetCommitResponseV7, error) {
 	if err := t.conn.SetDeadline(time.Now().Add(t.timeout)); err != nil {
-		return offsetCommitResponseV2{}, err
+		return offsetCommitResponseV7{}, err
 	}
 	return t.conn.offsetCommit(req)
 }
@@ -745,14 +749,19 @@ func (cg *ConsumerGroup) run() {
 			// this loop.
 
 		default:
-			// leave the group and report the error if we had gotten far
-			// enough so as to have a member ID.  also clear the member id
-			// so we don't attempt to use it again.  in order to avoid
-			// a tight error loop, backoff before the next attempt to join
-			// the group.
-			_ = cg.leaveGroup(memberID)
-			memberID = ""
-			backoff = time.After(cg.config.JoinGroupBackoff)
+			// Per KIP-345 static members should not leave the group. They
+			// have until session timeout (defined by cg.SessionTimeout) to
+			// rejoin otherwise a rebalance is triggerred.
+			if cg.config.InstanceID == "" {
+				// leave the group and report the error if we had gotten far
+				// enough so as to have a member ID.  also clear the member id
+				// so we don't attempt to use it again.  in order to avoid
+				// a tight error loop, backoff before the next attempt to join
+				// the group.
+				_ = cg.leaveGroup(memberID)
+				memberID = ""
+				backoff = time.After(cg.config.JoinGroupBackoff)
+			}
 		}
 		// ensure that we exit cleanly in case the CG is done and no one is
 		// waiting to receive on the unbuffered error channel.
@@ -925,12 +934,12 @@ func (cg *ConsumerGroup) coordinator() (coordinator, error) {
 // the leader.  Otherwise, GroupMemberAssignments will be nil.
 //
 // Possible kafka error codes returned:
-//  * GroupLoadInProgress:
-//  * GroupCoordinatorNotAvailable:
-//  * NotCoordinatorForGroup:
-//  * InconsistentGroupProtocol:
-//  * InvalidSessionTimeout:
-//  * GroupAuthorizationFailed:
+//   - GroupLoadInProgress:
+//   - GroupCoordinatorNotAvailable:
+//   - NotCoordinatorForGroup:
+//   - InconsistentGroupProtocol:
+//   - InvalidSessionTimeout:
+//   - GroupAuthorizationFailed:
 func (cg *ConsumerGroup) joinGroup(conn coordinator, memberID string) (string, int32, GroupMemberAssignments, error) {
 	request, err := cg.makeJoinGroupRequestV1(memberID)
 	if err != nil {
@@ -978,21 +987,24 @@ func (cg *ConsumerGroup) joinGroup(conn coordinator, memberID string) (string, i
 
 // makeJoinGroupRequestV1 handles the logic of constructing a joinGroup
 // request.
-func (cg *ConsumerGroup) makeJoinGroupRequestV1(memberID string) (joinGroupRequestV1, error) {
-	request := joinGroupRequestV1{
+func (cg *ConsumerGroup) makeJoinGroupRequestV1(memberID string) (joinGroupRequestV5, error) {
+	request := joinGroupRequestV5{
 		GroupID:          cg.config.ID,
 		MemberID:         memberID,
 		SessionTimeout:   int32(cg.config.SessionTimeout / time.Millisecond),
 		RebalanceTimeout: int32(cg.config.RebalanceTimeout / time.Millisecond),
 		ProtocolType:     defaultProtocolType,
 	}
+	if cg.config.InstanceID != "" {
+		request.GroupInstanceID = cg.config.InstanceID
+	}
 
 	for _, balancer := range cg.config.GroupBalancers {
 		userData, err := balancer.UserData()
 		if err != nil {
-			return joinGroupRequestV1{}, fmt.Errorf("unable to construct protocol metadata for member, %v: %w", balancer.ProtocolName(), err)
+			return joinGroupRequestV5{}, fmt.Errorf("unable to construct protocol metadata for member, %v: %w", balancer.ProtocolName(), err)
 		}
-		request.GroupProtocols = append(request.GroupProtocols, joinGroupRequestGroupProtocolV1{
+		request.GroupProtocols = append(request.GroupProtocols, joinGroupRequestGroupProtocolV5{
 			ProtocolName: balancer.ProtocolName(),
 			ProtocolMetadata: groupMetadata{
 				Version:  1,
@@ -1007,7 +1019,7 @@ func (cg *ConsumerGroup) makeJoinGroupRequestV1(memberID string) (joinGroupReque
 
 // assignTopicPartitions uses the selected GroupBalancer to assign members to
 // their various partitions.
-func (cg *ConsumerGroup) assignTopicPartitions(conn coordinator, group joinGroupResponseV1) (GroupMemberAssignments, error) {
+func (cg *ConsumerGroup) assignTopicPartitions(conn coordinator, group joinGroupResponseV5) (GroupMemberAssignments, error) {
 	cg.withLogger(func(l Logger) {
 		l.Printf("selected as leader for group, %s\n", cg.config.ID)
 	})
@@ -1050,7 +1062,7 @@ func (cg *ConsumerGroup) assignTopicPartitions(conn coordinator, group joinGroup
 }
 
 // makeMemberProtocolMetadata maps encoded member metadata ([]byte) into []GroupMember.
-func (cg *ConsumerGroup) makeMemberProtocolMetadata(in []joinGroupResponseMemberV1) ([]GroupMember, error) {
+func (cg *ConsumerGroup) makeMemberProtocolMetadata(in []joinGroupResponseMemberV5) ([]GroupMember, error) {
 	members := make([]GroupMember, 0, len(in))
 	for _, item := range in {
 		metadata := groupMetadata{}
@@ -1073,11 +1085,11 @@ func (cg *ConsumerGroup) makeMemberProtocolMetadata(in []joinGroupResponseMember
 // Readers subscriptions topic => partitions
 //
 // Possible kafka error codes returned:
-//  * GroupCoordinatorNotAvailable:
-//  * NotCoordinatorForGroup:
-//  * IllegalGeneration:
-//  * RebalanceInProgress:
-//  * GroupAuthorizationFailed:
+//   - GroupCoordinatorNotAvailable:
+//   - NotCoordinatorForGroup:
+//   - IllegalGeneration:
+//   - RebalanceInProgress:
+//   - GroupAuthorizationFailed:
 func (cg *ConsumerGroup) syncGroup(conn coordinator, memberID string, generationID int32, memberAssignments GroupMemberAssignments) (map[string][]int32, error) {
 	request := cg.makeSyncGroupRequestV0(memberID, generationID, memberAssignments)
 	response, err := conn.syncGroup(request)
@@ -1107,15 +1119,15 @@ func (cg *ConsumerGroup) syncGroup(conn coordinator, memberID string, generation
 	return assignments.Topics, nil
 }
 
-func (cg *ConsumerGroup) makeSyncGroupRequestV0(memberID string, generationID int32, memberAssignments GroupMemberAssignments) syncGroupRequestV0 {
-	request := syncGroupRequestV0{
+func (cg *ConsumerGroup) makeSyncGroupRequestV0(memberID string, generationID int32, memberAssignments GroupMemberAssignments) syncGroupRequestV3 {
+	request := syncGroupRequestV3{
 		GroupID:      cg.config.ID,
 		GenerationID: generationID,
 		MemberID:     memberID,
 	}
 
 	if memberAssignments != nil {
-		request.GroupAssignments = make([]syncGroupRequestGroupAssignmentV0, 0, 1)
+		request.GroupAssignments = make([]syncGroupRequestGroupAssignmentV5, 0, 1)
 
 		for memberID, topics := range memberAssignments {
 			topics32 := make(map[string][]int32)
@@ -1126,7 +1138,7 @@ func (cg *ConsumerGroup) makeSyncGroupRequestV0(memberID string, generationID in
 				}
 				topics32[topic] = partitions32
 			}
-			request.GroupAssignments = append(request.GroupAssignments, syncGroupRequestGroupAssignmentV0{
+			request.GroupAssignments = append(request.GroupAssignments, syncGroupRequestGroupAssignmentV5{
 				MemberID: memberID,
 				MemberAssignments: groupAssignment{
 					Version: 1,

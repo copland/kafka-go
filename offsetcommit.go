@@ -137,48 +137,58 @@ func (c *Client) OffsetCommit(ctx context.Context, req *OffsetCommitRequest) (*O
 	return res, nil
 }
 
-type offsetCommitRequestV2Partition struct {
+type offsetCommitRequestV7Partition struct {
 	// Partition ID
 	Partition int32
 
 	// Offset to be committed
 	Offset int64
 
+	// Timestamp of commit
+	Timestamp int64
+
+	// Leader epoch
+	LeaderEpoch int32
+
 	// Metadata holds any associated metadata the client wants to keep
 	Metadata string
 }
 
-func (t offsetCommitRequestV2Partition) size() int32 {
+func (t offsetCommitRequestV7Partition) size() int32 {
 	return sizeofInt32(t.Partition) +
 		sizeofInt64(t.Offset) +
+		sizeofInt64(t.Timestamp) +
+		sizeofInt32(t.LeaderEpoch) +
 		sizeofString(t.Metadata)
 }
 
-func (t offsetCommitRequestV2Partition) writeTo(wb *writeBuffer) {
+func (t offsetCommitRequestV7Partition) writeTo(wb *writeBuffer) {
 	wb.writeInt32(t.Partition)
 	wb.writeInt64(t.Offset)
+	wb.writeInt64(t.Timestamp)
+	wb.writeInt32(t.LeaderEpoch)
 	wb.writeString(t.Metadata)
 }
 
-type offsetCommitRequestV2Topic struct {
+type offsetCommitRequestV7Topic struct {
 	// Topic name
 	Topic string
 
 	// Partitions to commit offsets
-	Partitions []offsetCommitRequestV2Partition
+	Partitions []offsetCommitRequestV7Partition
 }
 
-func (t offsetCommitRequestV2Topic) size() int32 {
+func (t offsetCommitRequestV7Topic) size() int32 {
 	return sizeofString(t.Topic) +
 		sizeofArray(len(t.Partitions), func(i int) int32 { return t.Partitions[i].size() })
 }
 
-func (t offsetCommitRequestV2Topic) writeTo(wb *writeBuffer) {
+func (t offsetCommitRequestV7Topic) writeTo(wb *writeBuffer) {
 	wb.writeString(t.Topic)
 	wb.writeArray(len(t.Partitions), func(i int) { t.Partitions[i].writeTo(wb) })
 }
 
-type offsetCommitRequestV2 struct {
+type offsetCommitRequestV7 struct {
 	// GroupID holds the unique group identifier
 	GroupID string
 
@@ -191,44 +201,49 @@ type offsetCommitRequestV2 struct {
 	// RetentionTime holds the time period in ms to retain the offset.
 	RetentionTime int64
 
+	// GroupInstanceID holds the instance ID for static membership
+	GroupInstanceID string
+
 	// Topics to commit offsets
-	Topics []offsetCommitRequestV2Topic
+	Topics []offsetCommitRequestV7Topic
 }
 
-func (t offsetCommitRequestV2) size() int32 {
+func (t offsetCommitRequestV7) size() int32 {
 	return sizeofString(t.GroupID) +
 		sizeofInt32(t.GenerationID) +
 		sizeofString(t.MemberID) +
 		sizeofInt64(t.RetentionTime) +
+		sizeofString(t.GroupInstanceID) +
 		sizeofArray(len(t.Topics), func(i int) int32 { return t.Topics[i].size() })
 }
 
-func (t offsetCommitRequestV2) writeTo(wb *writeBuffer) {
+func (t offsetCommitRequestV7) writeTo(wb *writeBuffer) {
 	wb.writeString(t.GroupID)
 	wb.writeInt32(t.GenerationID)
 	wb.writeString(t.MemberID)
 	wb.writeInt64(t.RetentionTime)
+	wb.writeString(t.GroupInstanceID)
 	wb.writeArray(len(t.Topics), func(i int) { t.Topics[i].writeTo(wb) })
 }
 
-type offsetCommitResponseV2PartitionResponse struct {
+type offsetCommitResponseV7PartitionResponse struct {
 	Partition int32
 
 	// ErrorCode holds response error code
 	ErrorCode int16
 }
 
-func (t offsetCommitResponseV2PartitionResponse) size() int32 {
+func (t offsetCommitResponseV7PartitionResponse) size() int32 {
 	return sizeofInt32(t.Partition) +
 		sizeofInt16(t.ErrorCode)
 }
 
-func (t offsetCommitResponseV2PartitionResponse) writeTo(wb *writeBuffer) {
+func (t offsetCommitResponseV7PartitionResponse) writeTo(wb *writeBuffer) {
 	wb.writeInt32(t.Partition)
 	wb.writeInt16(t.ErrorCode)
 }
 
-func (t *offsetCommitResponseV2PartitionResponse) readFrom(r *bufio.Reader, size int) (remain int, err error) {
+func (t *offsetCommitResponseV7PartitionResponse) readFrom(r *bufio.Reader, size int) (remain int, err error) {
 	if remain, err = readInt32(r, size, &t.Partition); err != nil {
 		return
 	}
@@ -238,28 +253,28 @@ func (t *offsetCommitResponseV2PartitionResponse) readFrom(r *bufio.Reader, size
 	return
 }
 
-type offsetCommitResponseV2Response struct {
+type offsetCommitResponseV7Response struct {
 	Topic              string
-	PartitionResponses []offsetCommitResponseV2PartitionResponse
+	PartitionResponses []offsetCommitResponseV7PartitionResponse
 }
 
-func (t offsetCommitResponseV2Response) size() int32 {
+func (t offsetCommitResponseV7Response) size() int32 {
 	return sizeofString(t.Topic) +
 		sizeofArray(len(t.PartitionResponses), func(i int) int32 { return t.PartitionResponses[i].size() })
 }
 
-func (t offsetCommitResponseV2Response) writeTo(wb *writeBuffer) {
+func (t offsetCommitResponseV7Response) writeTo(wb *writeBuffer) {
 	wb.writeString(t.Topic)
 	wb.writeArray(len(t.PartitionResponses), func(i int) { t.PartitionResponses[i].writeTo(wb) })
 }
 
-func (t *offsetCommitResponseV2Response) readFrom(r *bufio.Reader, size int) (remain int, err error) {
+func (t *offsetCommitResponseV7Response) readFrom(r *bufio.Reader, size int) (remain int, err error) {
 	if remain, err = readString(r, size, &t.Topic); err != nil {
 		return
 	}
 
 	fn := func(r *bufio.Reader, withSize int) (fnRemain int, fnErr error) {
-		item := offsetCommitResponseV2PartitionResponse{}
+		item := offsetCommitResponseV7PartitionResponse{}
 		if fnRemain, fnErr = (&item).readFrom(r, withSize); fnErr != nil {
 			return
 		}
@@ -273,28 +288,34 @@ func (t *offsetCommitResponseV2Response) readFrom(r *bufio.Reader, size int) (re
 	return
 }
 
-type offsetCommitResponseV2 struct {
-	Responses []offsetCommitResponseV2Response
+type offsetCommitResponseV7 struct {
+	ThrottleTime int32
+	Responses    []offsetCommitResponseV7Response
 }
 
-func (t offsetCommitResponseV2) size() int32 {
-	return sizeofArray(len(t.Responses), func(i int) int32 { return t.Responses[i].size() })
+func (t offsetCommitResponseV7) size() int32 {
+	return sizeofInt32(t.ThrottleTime) +
+		sizeofArray(len(t.Responses), func(i int) int32 { return t.Responses[i].size() })
 }
 
-func (t offsetCommitResponseV2) writeTo(wb *writeBuffer) {
+func (t offsetCommitResponseV7) writeTo(wb *writeBuffer) {
+	wb.writeInt32(t.ThrottleTime)
 	wb.writeArray(len(t.Responses), func(i int) { t.Responses[i].writeTo(wb) })
 }
 
-func (t *offsetCommitResponseV2) readFrom(r *bufio.Reader, size int) (remain int, err error) {
+func (t *offsetCommitResponseV7) readFrom(r *bufio.Reader, size int) (remain int, err error) {
+	if remain, err = readInt32(r, size, &t.ThrottleTime); err != nil {
+		return
+	}
 	fn := func(r *bufio.Reader, withSize int) (fnRemain int, fnErr error) {
-		item := offsetCommitResponseV2Response{}
+		item := offsetCommitResponseV7Response{}
 		if fnRemain, fnErr = (&item).readFrom(r, withSize); fnErr != nil {
 			return
 		}
 		t.Responses = append(t.Responses, item)
 		return
 	}
-	if remain, err = readArrayWith(r, size, fn); err != nil {
+	if remain, err = readArrayWith(r, remain, fn); err != nil {
 		return
 	}
 

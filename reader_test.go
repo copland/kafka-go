@@ -1276,10 +1276,10 @@ func TestCommitLoopImmediateFlushOnGenerationEnd(t *testing.T) {
 	var commitCount int
 	gen := &Generation{
 		conn: mockCoordinator{
-			offsetCommitFunc: func(r offsetCommitRequestV2) (offsetCommitResponseV2, error) {
+			offsetCommitFunc: func(r offsetCommitRequestV7) (offsetCommitResponseV7, error) {
 				commitCount++
 				committedOffset = r.Topics[0].Partitions[0].Offset
-				return offsetCommitResponseV2{}, nil
+				return offsetCommitResponseV7{}, nil
 			},
 		},
 		done:     make(chan struct{}),
@@ -1345,12 +1345,12 @@ func TestCommitOffsetsWithRetry(t *testing.T) {
 			count := 0
 			gen := &Generation{
 				conn: mockCoordinator{
-					offsetCommitFunc: func(offsetCommitRequestV2) (offsetCommitResponseV2, error) {
+					offsetCommitFunc: func(offsetCommitRequestV7) (offsetCommitResponseV7, error) {
 						count++
 						if count <= test.Fails {
-							return offsetCommitResponseV2{}, io.EOF
+							return offsetCommitResponseV7{}, io.EOF
 						}
-						return offsetCommitResponseV2{}, nil
+						return offsetCommitResponseV7{}, nil
 					},
 				},
 				done:     make(chan struct{}),

@@ -210,9 +210,12 @@ func (t groupAssignment) bytes() []byte {
 	return buf.Bytes()
 }
 
-type syncGroupRequestGroupAssignmentV0 struct {
+type syncGroupRequestGroupAssignmentV5 struct {
 	// MemberID assigned by the group coordinator
 	MemberID string
+
+	// GroupInstanceID is the instance ID used for static membership
+	GroupInstanceID string
 
 	// MemberAssignments holds client encoded assignments
 	//
@@ -220,17 +223,19 @@ type syncGroupRequestGroupAssignmentV0 struct {
 	MemberAssignments []byte
 }
 
-func (t syncGroupRequestGroupAssignmentV0) size() int32 {
+func (t syncGroupRequestGroupAssignmentV5) size() int32 {
 	return sizeofString(t.MemberID) +
+		sizeofString(t.GroupInstanceID) +
 		sizeofBytes(t.MemberAssignments)
 }
 
-func (t syncGroupRequestGroupAssignmentV0) writeTo(wb *writeBuffer) {
+func (t syncGroupRequestGroupAssignmentV5) writeTo(wb *writeBuffer) {
 	wb.writeString(t.MemberID)
+	wb.writeString(t.GroupInstanceID)
 	wb.writeBytes(t.MemberAssignments)
 }
 
-type syncGroupRequestV0 struct {
+type syncGroupRequestV3 struct {
 	// GroupID holds the unique group identifier
 	GroupID string
 
@@ -240,24 +245,32 @@ type syncGroupRequestV0 struct {
 	// MemberID assigned by the group coordinator
 	MemberID string
 
-	GroupAssignments []syncGroupRequestGroupAssignmentV0
+	// GroupInstanceID the instance ID used to identify a static member
+	GroupInstanceID string
+
+	GroupAssignments []syncGroupRequestGroupAssignmentV5
 }
 
-func (t syncGroupRequestV0) size() int32 {
+func (t syncGroupRequestV3) size() int32 {
 	return sizeofString(t.GroupID) +
 		sizeofInt32(t.GenerationID) +
 		sizeofString(t.MemberID) +
+		sizeofString(t.GroupInstanceID) +
 		sizeofArray(len(t.GroupAssignments), func(i int) int32 { return t.GroupAssignments[i].size() })
 }
 
-func (t syncGroupRequestV0) writeTo(wb *writeBuffer) {
+func (t syncGroupRequestV3) writeTo(wb *writeBuffer) {
 	wb.writeString(t.GroupID)
 	wb.writeInt32(t.GenerationID)
 	wb.writeString(t.MemberID)
+	wb.writeString(t.GroupInstanceID)
 	wb.writeArray(len(t.GroupAssignments), func(i int) { t.GroupAssignments[i].writeTo(wb) })
 }
 
-type syncGroupResponseV0 struct {
+type syncGroupResponseV3 struct {
+	// ThrottleTime holds response throttle time
+	ThrottleTime int32
+
 	// ErrorCode holds response error code
 	ErrorCode int16
 
@@ -267,18 +280,23 @@ type syncGroupResponseV0 struct {
 	MemberAssignments []byte
 }
 
-func (t syncGroupResponseV0) size() int32 {
-	return sizeofInt16(t.ErrorCode) +
+func (t syncGroupResponseV3) size() int32 {
+	return sizeofInt32(t.ThrottleTime) +
+		sizeofInt16(t.ErrorCode) +
 		sizeofBytes(t.MemberAssignments)
 }
 
-func (t syncGroupResponseV0) writeTo(wb *writeBuffer) {
+func (t syncGroupResponseV3) writeTo(wb *writeBuffer) {
+	wb.writeInt32(t.ThrottleTime)
 	wb.writeInt16(t.ErrorCode)
 	wb.writeBytes(t.MemberAssignments)
 }
 
-func (t *syncGroupResponseV0) readFrom(r *bufio.Reader, sz int) (remain int, err error) {
-	if remain, err = readInt16(r, sz, &t.ErrorCode); err != nil {
+func (t *syncGroupResponseV3) readFrom(r *bufio.Reader, sz int) (remain int, err error) {
+	if remain, err = readInt32(r, sz, &t.ThrottleTime); err != nil {
+		return
+	}
+	if remain, err = readInt16(r, remain, &t.ErrorCode); err != nil {
 		return
 	}
 	if remain, err = readBytes(r, remain, &t.MemberAssignments); err != nil {

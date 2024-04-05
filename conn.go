@@ -342,12 +342,12 @@ func (c *Conn) findCoordinator(request findCoordinatorRequestV0) (findCoordinato
 // heartbeat sends a heartbeat message required by consumer groups
 //
 // See http://kafka.apache.org/protocol.html#The_Messages_Heartbeat
-func (c *Conn) heartbeat(request heartbeatRequestV0) (heartbeatResponseV0, error) {
-	var response heartbeatResponseV0
+func (c *Conn) heartbeat(request heartbeatRequestV3) (heartbeatResponseV3, error) {
+	var response heartbeatResponseV3
 
 	err := c.writeOperation(
 		func(deadline time.Time, id int32) error {
-			return c.writeRequest(heartbeat, v0, id, request)
+			return c.writeRequest(heartbeat, v3, id, request)
 		},
 		func(deadline time.Time, size int) error {
 			return expectZeroSize(func() (remain int, err error) {
@@ -356,10 +356,10 @@ func (c *Conn) heartbeat(request heartbeatRequestV0) (heartbeatResponseV0, error
 		},
 	)
 	if err != nil {
-		return heartbeatResponseV0{}, err
+		return heartbeatResponseV3{}, err
 	}
 	if response.ErrorCode != 0 {
-		return heartbeatResponseV0{}, Error(response.ErrorCode)
+		return heartbeatResponseV3{}, Error(response.ErrorCode)
 	}
 
 	return response, nil
@@ -368,12 +368,12 @@ func (c *Conn) heartbeat(request heartbeatRequestV0) (heartbeatResponseV0, error
 // joinGroup attempts to join a consumer group
 //
 // See http://kafka.apache.org/protocol.html#The_Messages_JoinGroup
-func (c *Conn) joinGroup(request joinGroupRequestV1) (joinGroupResponseV1, error) {
-	var response joinGroupResponseV1
+func (c *Conn) joinGroup(request joinGroupRequestV5) (joinGroupResponseV5, error) {
+	var response joinGroupResponseV5
 
 	err := c.writeOperation(
 		func(deadline time.Time, id int32) error {
-			return c.writeRequest(joinGroup, v1, id, request)
+			return c.writeRequest(joinGroup, v5, id, request)
 		},
 		func(deadline time.Time, size int) error {
 			return expectZeroSize(func() (remain int, err error) {
@@ -382,10 +382,10 @@ func (c *Conn) joinGroup(request joinGroupRequestV1) (joinGroupResponseV1, error
 		},
 	)
 	if err != nil {
-		return joinGroupResponseV1{}, err
+		return joinGroupResponseV5{}, err
 	}
 	if response.ErrorCode != 0 {
-		return joinGroupResponseV1{}, Error(response.ErrorCode)
+		return joinGroupResponseV5{}, Error(response.ErrorCode)
 	}
 
 	return response, nil
@@ -446,12 +446,12 @@ func (c *Conn) listGroups(request listGroupsRequestV1) (listGroupsResponseV1, er
 // offsetCommit commits the specified topic partition offsets
 //
 // See http://kafka.apache.org/protocol.html#The_Messages_OffsetCommit
-func (c *Conn) offsetCommit(request offsetCommitRequestV2) (offsetCommitResponseV2, error) {
-	var response offsetCommitResponseV2
+func (c *Conn) offsetCommit(request offsetCommitRequestV7) (offsetCommitResponseV7, error) {
+	var response offsetCommitResponseV7
 
 	err := c.writeOperation(
 		func(deadline time.Time, id int32) error {
-			return c.writeRequest(offsetCommit, v2, id, request)
+			return c.writeRequest(offsetCommit, v7, id, request)
 		},
 		func(deadline time.Time, size int) error {
 			return expectZeroSize(func() (remain int, err error) {
@@ -460,12 +460,12 @@ func (c *Conn) offsetCommit(request offsetCommitRequestV2) (offsetCommitResponse
 		},
 	)
 	if err != nil {
-		return offsetCommitResponseV2{}, err
+		return offsetCommitResponseV7{}, err
 	}
 	for _, r := range response.Responses {
 		for _, pr := range r.PartitionResponses {
 			if pr.ErrorCode != 0 {
-				return offsetCommitResponseV2{}, Error(pr.ErrorCode)
+				return offsetCommitResponseV7{}, Error(pr.ErrorCode)
 			}
 		}
 	}
@@ -507,12 +507,12 @@ func (c *Conn) offsetFetch(request offsetFetchRequestV1) (offsetFetchResponseV1,
 // syncGroup completes the handshake to join a consumer group
 //
 // See http://kafka.apache.org/protocol.html#The_Messages_SyncGroup
-func (c *Conn) syncGroup(request syncGroupRequestV0) (syncGroupResponseV0, error) {
-	var response syncGroupResponseV0
+func (c *Conn) syncGroup(request syncGroupRequestV3) (syncGroupResponseV3, error) {
+	var response syncGroupResponseV3
 
 	err := c.readOperation(
 		func(deadline time.Time, id int32) error {
-			return c.writeRequest(syncGroup, v0, id, request)
+			return c.writeRequest(syncGroup, v3, id, request)
 		},
 		func(deadline time.Time, size int) error {
 			return expectZeroSize(func() (remain int, err error) {
@@ -521,10 +521,10 @@ func (c *Conn) syncGroup(request syncGroupRequestV0) (syncGroupResponseV0, error
 		},
 	)
 	if err != nil {
-		return syncGroupResponseV0{}, err
+		return syncGroupResponseV3{}, err
 	}
 	if response.ErrorCode != 0 {
-		return syncGroupResponseV0{}, Error(response.ErrorCode)
+		return syncGroupResponseV3{}, Error(response.ErrorCode)
 	}
 
 	return response, nil

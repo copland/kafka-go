@@ -106,6 +106,10 @@ func makeGroupID() string {
 	return fmt.Sprintf("kafka-go-group-%016x", rand.Int63())
 }
 
+func makeGroupInstanceID() string {
+	return fmt.Sprintf("kafka-go-instance-%016x", rand.Int63())
+}
+
 func makeTransactionalID() string {
 	return fmt.Sprintf("kafka-go-transactional-id-%016x", rand.Int63())
 }
@@ -679,15 +683,15 @@ func waitForCoordinator(t *testing.T, conn *Conn, groupID string) {
 func createGroup(t *testing.T, conn *Conn, groupID string) (generationID int32, memberID string, stop func()) {
 	waitForCoordinator(t, conn, groupID)
 
-	join := func() (joinGroup joinGroupResponseV1) {
+	join := func() (joinGroup joinGroupResponseV5) {
 		var err error
 		for attempt := 0; attempt < 10; attempt++ {
-			joinGroup, err = conn.joinGroup(joinGroupRequestV1{
+			joinGroup, err = conn.joinGroup(joinGroupRequestV5{
 				GroupID:          groupID,
 				SessionTimeout:   int32(time.Minute / time.Millisecond),
 				RebalanceTimeout: int32(time.Second / time.Millisecond),
 				ProtocolType:     "roundrobin",
-				GroupProtocols: []joinGroupRequestGroupProtocolV1{
+				GroupProtocols: []joinGroupRequestGroupProtocolV5{
 					{
 						ProtocolName:     "roundrobin",
 						ProtocolMetadata: []byte("blah"),
@@ -713,11 +717,11 @@ func createGroup(t *testing.T, conn *Conn, groupID string) (generationID int32, 
 	joinGroup := join()
 
 	// sync the group
-	_, err := conn.syncGroup(syncGroupRequestV0{
+	_, err := conn.syncGroup(syncGroupRequestV3{
 		GroupID:      groupID,
 		GenerationID: joinGroup.GenerationID,
 		MemberID:     joinGroup.MemberID,
-		GroupAssignments: []syncGroupRequestGroupAssignmentV0{
+		GroupAssignments: []syncGroupRequestGroupAssignmentV5{
 			{
 				MemberID:          joinGroup.MemberID,
 				MemberAssignments: []byte("blah"),
@@ -770,7 +774,7 @@ func testConnFindCoordinator(t *testing.T, conn *Conn) {
 }
 
 func testConnJoinGroupInvalidGroupID(t *testing.T, conn *Conn) {
-	_, err := conn.joinGroup(joinGroupRequestV1{})
+	_, err := conn.joinGroup(joinGroupRequestV5{})
 	if !errors.Is(err, InvalidGroupId) && !errors.Is(err, NotCoordinatorForGroup) {
 		t.Fatalf("expected %v or %v; got %v", InvalidGroupId, NotCoordinatorForGroup, err)
 	}
@@ -780,7 +784,7 @@ func testConnJoinGroupInvalidSessionTimeout(t *testing.T, conn *Conn) {
 	groupID := makeGroupID()
 	waitForCoordinator(t, conn, groupID)
 
-	_, err := conn.joinGroup(joinGroupRequestV1{
+	_, err := conn.joinGroup(joinGroupRequestV5{
 		GroupID: groupID,
 	})
 	if !errors.Is(err, InvalidSessionTimeout) && !errors.Is(err, NotCoordinatorForGroup) {
@@ -792,7 +796,7 @@ func testConnJoinGroupInvalidRefreshTimeout(t *testing.T, conn *Conn) {
 	groupID := makeGroupID()
 	waitForCoordinator(t, conn, groupID)
 
-	_, err := conn.joinGroup(joinGroupRequestV1{
+	_, err := conn.joinGroup(joinGroupRequestV5{
 		GroupID:        groupID,
 		SessionTimeout: int32(3 * time.Second / time.Millisecond),
 	})
@@ -805,7 +809,7 @@ func testConnHeartbeatErr(t *testing.T, conn *Conn) {
 	groupID := makeGroupID()
 	createGroup(t, conn, groupID)
 
-	_, err := conn.syncGroup(syncGroupRequestV0{
+	_, err := conn.syncGroup(syncGroupRequestV3{
 		GroupID: groupID,
 	})
 	if !errors.Is(err, UnknownMemberId) && !errors.Is(err, NotCoordinatorForGroup) {
@@ -829,7 +833,7 @@ func testConnSyncGroupErr(t *testing.T, conn *Conn) {
 	groupID := makeGroupID()
 	waitForCoordinator(t, conn, groupID)
 
-	_, err := conn.syncGroup(syncGroupRequestV0{
+	_, err := conn.syncGroup(syncGroupRequestV3{
 		GroupID: groupID,
 	})
 	if !errors.Is(err, UnknownMemberId) && !errors.Is(err, NotCoordinatorForGroup) {
@@ -906,15 +910,15 @@ func testConnFetchAndCommitOffsets(t *testing.T, conn *Conn) {
 	}
 
 	committedOffset := int64(N - 1)
-	_, err = conn.offsetCommit(offsetCommitRequestV2{
+	_, err = conn.offsetCommit(offsetCommitRequestV7{
 		GroupID:       groupID,
 		GenerationID:  generationID,
 		MemberID:      memberID,
 		RetentionTime: int64(time.Hour / time.Millisecond),
-		Topics: []offsetCommitRequestV2Topic{
+		Topics: []offsetCommitRequestV7Topic{
 			{
 				Topic: conn.topic,
-				Partitions: []offsetCommitRequestV2Partition{
+				Partitions: []offsetCommitRequestV7Partition{
 					{
 						Partition: 0,
 						Offset:    committedOffset,

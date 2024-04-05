@@ -357,6 +357,10 @@ type ReaderConfig struct {
 	// Partition should NOT be specified e.g. 0
 	GroupID string
 
+	// GroupInstanceID defines the optional member ID used for static group
+	// membership. If this value is not provided, the member will be dynamic.
+	GroupInstanceID string
+
 	// GroupTopics allows specifying multiple topics, but can only be used in
 	// combination with GroupID, as it is a consumer-group feature. As such, if
 	// GroupID is set, then either Topic or GroupTopics must be defined.
@@ -723,6 +727,7 @@ func NewReader(config ReaderConfig) *Reader {
 		r.runError = make(chan error)
 		cg, err := NewConsumerGroup(ConsumerGroupConfig{
 			ID:                     r.config.GroupID,
+			InstanceID:             r.config.GroupInstanceID,
 			Brokers:                r.config.Brokers,
 			Dialer:                 r.config.Dialer,
 			Topics:                 r.getTopics(),

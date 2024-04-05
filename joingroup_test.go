@@ -217,14 +217,14 @@ func TestMemberMetadata(t *testing.T) {
 	}
 }
 
-func TestJoinGroupResponseV1(t *testing.T) {
-	item := joinGroupResponseV1{
+func TestJoinGroupResponseV5(t *testing.T) {
+	item := joinGroupResponseV5{
 		ErrorCode:     2,
 		GenerationID:  3,
 		GroupProtocol: "a",
 		LeaderID:      "b",
 		MemberID:      "c",
-		Members: []joinGroupResponseMemberV1{
+		Members: []joinGroupResponseMemberV5{
 			{
 				MemberID:       "d",
 				MemberMetadata: []byte("blah"),
@@ -236,7 +236,7 @@ func TestJoinGroupResponseV1(t *testing.T) {
 	w := &writeBuffer{w: b}
 	item.writeTo(w)
 
-	var found joinGroupResponseV1
+	var found joinGroupResponseV5
 	remain, err := (&found).readFrom(bufio.NewReader(b), b.Len())
 	if err != nil {
 		t.Error(err)
